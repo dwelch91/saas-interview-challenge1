@@ -105,7 +105,7 @@ def run_ffmpeg(worker: str, input_file: Path, transform_args, progress_callback)
     if len(lines) > 200:
         [logger.info(line) for line in lines[:100]]
         logger.info("--- snip ---")
-        [logger.info(line) for line in lines[len(lines) - 100:]]
+        [logger.info(line) for line in lines[-100:]]
     else:
         [logger.info(line) for line in lines]
 
