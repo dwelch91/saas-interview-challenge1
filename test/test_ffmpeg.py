@@ -76,6 +76,6 @@ class TestFfmpeg(TestCase):
         root_dir = Path(__file__).parents[1]
         samples_dir = root_dir / 'samples'
         sample = samples_dir / 'Bars-1280x720-29.97-DF.mp4'
-        output_file, output = run_ffmpeg(1, sample, ['-s', '640x480'], progress)
+        output_file, output = run_ffmpeg('worker1', sample, ['-s', '640x480'], progress)
         print(output_file)
         print(output)

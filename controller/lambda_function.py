@@ -2,7 +2,9 @@ import json
 import logging
 from time import time
 from typing import Dict
+from datetime import datetime as Datetime
 
+from pynamodb.exceptions import PutError
 from pynamodb.models import Model
 from pynamodb.attributes import UnicodeAttribute, NumberAttribute
 
@@ -11,32 +13,51 @@ from jmespath import search
 from shared.utils import send_message
 
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
 class Jobs(Model):
     class Meta:
-        table_name = 'Workflows'
+        table_name = 'Jobs'
         region = 'us-west-2'
-        read_capacity_units = 10
-        write_capacity_units = 10
+        read_capacity_units = 5
+        write_capacity_units = 5
 
-    path = UnicodeAttribute(hash_key=True)
+
+
+    filename = UnicodeAttribute(hash_key=True)
     timestamp = NumberAttribute(range_key=True)
+    datetime = UnicodeAttribute()
     worker = NumberAttribute()
     result = UnicodeAttribute(null=True)
     progress = NumberAttribute()
 
 
-def record_job(bucket, key, worker, progress, result=None):
+def record_job(key, worker, progress, result=None):
     timestamp = time() * 1_000
-    job = Jobs(f"s3://{bucket}/{key}", timestamp, worker=worker, result=result, progress=progress)
-    job.save()
+    try:
+        job = Jobs(key, timestamp, worker=worker, result=result, progress=progress,
+                   datetime=Datetime.utcnow().isoformat(timespec='milliseconds') + 'Z')
+        job.save()
+    except PutError as e:
+        logger.error(str(e))
 
 
 def handle_s3(record):
     bucket = search('s3.bucket.name', record)
     key = search('s3.object.key', record)
-    send_message('controller', 'worker1', 'StartJob', {"bucket": bucket, "key": key})
+    size = search('s3.object.size', record)
+    if size > 0:
+        logger.info(f"Handling S3 trigger (file={key}, size={size})...")
+
+        # Start 2 workers in parallel
+        send_message('controller', 'worker1', 'StartJob', {"bucket": bucket,
+                                                           "key": key,
+                                                           'args': ['-s', '1920x1080']})
+
+        send_message('controller', 'worker2', 'StartJob', {'bucket': bucket,
+                                                           'key': key,
+                                                           'args': ['-vf', 'transpose=1', '-s', '640x480']})
 
 
 def lambda_handler(event: Dict, context: Dict):
@@ -60,33 +81,31 @@ def lambda_handler(event: Dict, context: Dict):
             msg_type = msg.get('type')
             from_ = msg.get('from')
 
-            logger.info(f"Handling message from {from_}...")
+            logger.info(f"Handling message from {from_}: {msg}")
 
             if msg_type == 'JobProgress':
-                bucket = msg.get('bucket')
                 key = msg.get('key')
                 progress = int(msg.get('progress'))
-                record_job(bucket, key, 1, progress)
+                worker = int(from_[-1])
+                record_job(key, worker, progress)
+                return
 
-            if msg_type == 'JobCompleted' and from_ == 'worker1':
+            elif msg_type == 'JobCompleted':
                 bucket = msg.get('bucket')
                 key = msg.get('key')
                 result = msg.get('result')
-                record_job(bucket, key, 1, 100 if result == 'Passed' else 0, result)
-                send_message('controller', 'worker2', 'StartJob', {'bucket': bucket, 'key': key})
+                worker = int(from_[-1])
+                record_job(key, worker, 100 if result == 'Passed' else 0, result)
 
-            elif msg_type == 'JobCompleted' and from_ == 'worker2':
-                bucket = msg.get('bucket')
-                key = msg.get('key')
-                result = msg.get('result')
-                record_job(bucket, key, 2, 100 if result == 'Passed' else 0, result)
-                send_message('controller', 'worker3', 'StartJob', {'bucket': bucket, 'key': key})
+                if worker == 2:
+                    # Worker 3 runs sequentially after worker 2
+                    send_message('controller', 'worker3', 'StartJob', {'bucket': bucket,
+                                                                       'key': key,
+                                                                       'args': []})
+                return
 
-            elif msg_type == 'JobCompleted' and from_ == 'worker3':
-                bucket = msg.get('bucket')
-                key = msg.get('key')
-                result = msg.get('result')
-                record_job(bucket, key, 3, 100 if result == 'Passed' else 0, result)
 
         elif s3 is not None:
+            logger.info(f"Handling S3 trigger...")
             handle_s3(record)
+            return

@@ -1,18 +1,18 @@
 import json
 import logging
 from time import sleep
-from typing import Dict
+from typing import Dict, List
 
-from shared.utils import send_message
+from shared.utils import send_message, WorkError
 
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
-class WorkError(Exception):
-    pass
+WORKER = 'worker3'
 
 
-def perform_work(bucket: str, key: str):
+def perform_work(bucket: str, key: str, args: List):
     sleep(2)
     raise WorkError("Simulate a failure in this lambda!")
 
@@ -37,18 +37,21 @@ def lambda_handler(event: Dict, context: Dict):
             msg_type = msg.get('type')
             from_ = msg.get('from')
 
-            logger.info(f"Handling message from {from_}...")
+            logger.info(f"Handling message from {from_}: {msg}")
 
             if msg_type == 'StartJob' and from_ == 'controller':
                 bucket = msg.get('bucket')
                 key = msg.get('key')
+                args = msg.get('args')
+
                 try:
-                    perform_work(bucket, key)
+                    perform_work(bucket, key, args)
                     result = 'Passed'
                 except WorkError as e:
+                    logger.error(str(e))
                     result = 'Failed'
 
-                send_message('worker3', 'controller', 'JobCompleted',
+                send_message(WORKER, 'controller', 'JobCompleted',
                              {'bucket': bucket,
                               'key': key,
                               'result': result})

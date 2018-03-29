@@ -1,25 +1,29 @@
 import json
 import logging
-from typing import Dict
+from typing import Dict, List
 
-from shared.utils import send_message, run_ffmpeg, download_from_s3, upload_to_s3
+from shared.utils import send_message, run_ffmpeg, download_from_s3, upload_to_s3, get_output_bucket, WorkError, \
+    get_output_key
 
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
-class WorkError(Exception):
-    pass
+WORKER = 'worker2'
 
 
-def perform_work(bucket: str, key: str):
+def perform_work(bucket: str, key: str, args: List):
 
     def progress_callback(progress: int):
-        send_message('worker1', 'controller', 'JobProgress', {'bucket': bucket, 'key': key, 'progress': progress})
+        logger.info(f"Progress: {progress}%")
+        send_message(WORKER, 'controller', 'JobProgress', {'bucket': bucket, 'key': key, 'progress': progress})
 
     progress_callback(0)
     input_file = download_from_s3(bucket, key)
-    output_file, output = run_ffmpeg(1, input_file, ['-vf', 'transpose=1', '-s', '640x480'], progress_callback)
-    upload_to_s3(bucket, key, output_file)
+    output_file, output = run_ffmpeg(WORKER, input_file, args, progress_callback)
+    output_bucket = get_output_bucket(bucket)
+    output_key = get_output_key(WORKER, key)
+    upload_to_s3(output_bucket, output_key, output_file)
 
 
 def lambda_handler(event: Dict, context: Dict):
@@ -42,19 +46,21 @@ def lambda_handler(event: Dict, context: Dict):
             msg_type = msg.get('type')
             from_ = msg.get('from')
 
-            logger.info(f"Handling message from {from_}...")
+            logger.info(f"Handling message from {from_}: {msg}")
 
             if msg_type == 'StartJob' and from_ == 'controller':
                 bucket = msg.get('bucket')
                 key = msg.get('key')
+                args = msg.get('args')
 
                 try:
-                    perform_work(bucket, key)
+                    perform_work(bucket, key, args)
                     result = 'Passed'
                 except WorkError as e:
+                    logger.error(str(e))
                     result = 'Failed'
 
-                send_message('controller', 'worker2', 'JobCompleted',
+                send_message(WORKER, 'controller', 'JobCompleted',
                              {'bucket': bucket,
                               'key': key,
                               'result': result})
