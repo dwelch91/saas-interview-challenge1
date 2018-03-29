@@ -137,6 +137,6 @@ def download_from_s3(bucket: str, key: str):
 
 
 def upload_to_s3(bucket: str, key: str, output_file: Path):
-    logger.info(f"Uploading to {output_file} to s3://{bucket}/{key}...")
+    logger.info(f"Uploading from {output_file} to s3://{bucket}/{key}...")
     s3 = boto3.client('s3')
     s3.upload_file(str(output_file), bucket, key)
